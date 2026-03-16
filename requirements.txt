@@ -1,5 +1,6 @@
 # requirements.txt
 flask
+flask-cors
 yt-dlp
 groq
 gunicorn

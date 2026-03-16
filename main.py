@@ -1,5 +1,6 @@
 # main.py
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import yt_dlp
 import groq
 import os
@@ -8,6 +9,7 @@ import uuid
 import traceback
 
 app = Flask(__name__)
+CORS(app)
 client = groq.Groq(api_key=os.environ["GROQ_API_KEY"])
 
 @app.route("/transcribe", methods=["POST"])
