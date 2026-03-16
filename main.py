@@ -4,26 +4,83 @@ import yt_dlp
 import groq
 import os
 import glob
+import uuid
+import traceback
 
 app = Flask(__name__)
 client = groq.Groq(api_key=os.environ["GROQ_API_KEY"])
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
-    url = request.json["url"]
+    audio_path = None
+    try:
+        data = request.get_json(force=True)
+        if not data or not data.get("url"):
+            return jsonify({"error": "url manquante"}), 400
 
-    ydl_opts = {"format": "bestaudio", "outtmpl": "/tmp/audio.%(ext)s"}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        url = data["url"].strip()
 
-    audio_file = glob.glob("/tmp/audio.*")[0]
+        # Fichier unique par requête pour éviter les conflits
+        unique_id = str(uuid.uuid4())[:8]
+        output_template = f"/tmp/audio_{unique_id}.%(ext)s"
 
-    with open(audio_file, "rb") as f:
-        transcription = client.audio.transcriptions.create(
-            file=f, model="whisper-large-v3"
-        )
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            "extractor_args": {
+                "tiktok": {"webpage_download": ["1"]},
+            },
+        }
 
-    return jsonify({"transcription": transcription.text})
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            return jsonify({"error": f"Téléchargement échoué : {str(e)}"}), 422
+
+        # Trouve le fichier téléchargé
+        files = glob.glob(f"/tmp/audio_{unique_id}.*")
+        if not files:
+            return jsonify({"error": "Fichier audio introuvable après téléchargement"}), 422
+
+        audio_path = files[0]
+
+        # Limite 25 MB (Groq Whisper)
+        size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        if size_mb > 25:
+            return jsonify({"error": f"Fichier audio trop grand ({size_mb:.1f} MB, max 25 MB)"}), 422
+
+        with open(audio_path, "rb") as f:
+            transcription = client.audio.transcriptions.create(
+                file=(os.path.basename(audio_path), f),
+                model="whisper-large-v3",
+            )
+
+        return jsonify({"transcription": transcription.text})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Nettoyage systématique
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
