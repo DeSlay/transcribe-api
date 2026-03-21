@@ -120,28 +120,39 @@ def profile_videos():
 def _fetch_instagram(url):
     try:
         # Extrait le username depuis l'URL
-        username = url.rstrip("/").split("/")[-1].lstrip("@")
-        if not username:
+        parts = url.rstrip("/").split("/")
+        username = parts[-1].lstrip("@")
+        # Gérer les URLs comme instagram.com/username ou @username
+        if not username or username.startswith("http"):
             return jsonify({"error": "Username Instagram introuvable dans l'URL"}), 400
 
         L = instaloader.Instaloader(quiet=True, download_pictures=False,
                                      download_videos=False, download_video_thumbnails=False)
         profile = instaloader.Profile.from_username(L.context, username)
 
-        videos = []
+        posts = []
+        count = 0
         for post in profile.get_posts():
-            if post.is_video:
-                videos.append({
-                    "id": post.shortcode,
-                    "title": (post.caption[:80] if post.caption else "Sans titre"),
-                    "url": f"https://www.instagram.com/p/{post.shortcode}/",
-                    "thumbnail": post.url,
-                    "duration": post.video_duration,
-                })
-            if len(videos) >= 20:
+            count += 1
+            if post.typename == "GraphSidecar":
+                post_type = "carousel"
+            elif post.is_video:
+                post_type = "video"
+            else:
+                post_type = "image"
+
+            posts.append({
+                "id": post.shortcode,
+                "title": (post.caption[:100] if post.caption else "Sans titre"),
+                "url": f"https://www.instagram.com/p/{post.shortcode}/",
+                "thumbnail": post.url,
+                "duration": post.video_duration if post.is_video else None,
+                "type": post_type,
+            })
+            if count >= 30:  # Limite stricte — évite l'OOM
                 break
 
-        return jsonify({"videos": videos, "platform": "instagram"})
+        return jsonify({"videos": posts, "platform": "instagram"})
     except Exception as e:
         return jsonify({"error": f"Instagram : {str(e)}"}), 500
 
