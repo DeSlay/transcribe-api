@@ -148,9 +148,15 @@ def _fetch_instagram(url):
                 "thumbnail": post.url,
                 "duration": post.video_duration if post.is_video else None,
                 "type": post_type,
+                "likes": post.likes or 0,
+                "views": post.video_view_count if post.is_video else None,
+                "comments": post.comments or 0,
             })
-            if count >= 30:  # Limite stricte — évite l'OOM
+            if count >= 30:
                 break
+
+        # Trier par likes décroissant — les plus performants en premier
+        posts.sort(key=lambda p: p["likes"], reverse=True)
 
         return jsonify({"videos": posts, "platform": "instagram"})
     except Exception as e:
