@@ -11,6 +11,7 @@ import traceback
 import re
 import http.cookiejar
 import instaloader
+import requests as _requests
 
 app = Flask(__name__)
 CORS(app)
@@ -136,8 +137,55 @@ def profile_videos():
         return _fetch_youtube(url)
 
 
+def _apify_instagram(username):
+    """Scrape via Apify Instagram Profile Scraper (proxies résidentiels)."""
+    token = os.environ.get("APIFY_API_TOKEN")
+    if not token:
+        raise Exception("APIFY_API_TOKEN non défini")
+
+    run_url = (
+        "https://api.apify.com/v2/acts/apify~instagram-profile-scraper"
+        f"/run-sync-get-dataset-items?token={token}&timeout=90"
+    )
+    resp = _requests.post(
+        run_url,
+        json={"usernames": [username], "resultsLimit": 30},
+        timeout=120,
+    )
+    resp.raise_for_status()
+    items = resp.json()
+
+    posts = []
+    for item in items:
+        item_type = item.get("type", "")
+        if item_type == "Video":
+            post_type = "video"
+        elif item_type == "Sidecar":
+            post_type = "carousel"
+        else:
+            post_type = "image"
+
+        shortcode = item.get("shortCode", "")
+        posts.append({
+            "id": shortcode,
+            "title": (item.get("caption") or "Sans titre")[:100],
+            "url": f"https://www.instagram.com/p/{shortcode}/",
+            "thumbnail": item.get("displayUrl"),
+            "duration": item.get("videoDuration"),
+            "type": post_type,
+            "likes": item.get("likesCount") or 0,
+            "views": item.get("videoViewCount"),
+            "comments": item.get("commentsCount") or 0,
+        })
+
+    if not posts:
+        raise Exception("Apify n'a retourné aucun post")
+
+    return posts
+
+
 def _fetch_instagram(url):
-    """Scrape un profil Instagram via yt-dlp (cookies) avec fallback instaloader."""
+    """Scrape un profil Instagram : Apify → yt-dlp → instaloader."""
     # Extrait le username
     parts = url.rstrip("/").split("/")
     username = parts[-1].lstrip("@")
@@ -147,6 +195,14 @@ def _fetch_instagram(url):
         return jsonify({"error": "Username Instagram introuvable dans l'URL"}), 400
 
     profile_url = f"https://www.instagram.com/{username}/"
+
+    # ── Tentative 0 : Apify (proxies résidentiels — contourne le blocage IP) ──
+    try:
+        posts = _apify_instagram(username)
+        posts.sort(key=lambda p: p["likes"], reverse=True)
+        return jsonify({"videos": posts, "platform": "instagram"})
+    except Exception as e0:
+        print(f"[instagram] Apify échoué ({e0}), tentative yt-dlp...")
 
     # ── Tentative 1 : yt-dlp (plus robuste sur les IPs datacenter) ────────────
     try:
@@ -227,7 +283,13 @@ def _fetch_instagram(url):
 
     except Exception as e2:
         traceback.print_exc()
-        return jsonify({"error": f"Instagram inaccessible : {str(e2)}"}), 500
+        return jsonify({
+            "error": (
+                f"Instagram bloque les IPs datacenter ({str(e2)}). "
+                "Ajoutez APIFY_API_TOKEN sur Render (proxy résidentiel) "
+                "ou utilisez les URLs individuelles."
+            )
+        }), 500
 
 
 def _fetch_youtube(url):
