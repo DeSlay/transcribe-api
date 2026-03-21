@@ -137,14 +137,63 @@ def profile_videos():
 
 
 def _fetch_instagram(url):
-    try:
-        # Extrait le username depuis l'URL
-        parts = url.rstrip("/").split("/")
-        username = parts[-1].lstrip("@")
-        # Gérer les URLs comme instagram.com/username ou @username
-        if not username or username.startswith("http"):
-            return jsonify({"error": "Username Instagram introuvable dans l'URL"}), 400
+    """Scrape un profil Instagram via yt-dlp (cookies) avec fallback instaloader."""
+    # Extrait le username
+    parts = url.rstrip("/").split("/")
+    username = parts[-1].lstrip("@")
+    if not username or "." in username.split("instagram")[-1] == 0:
+        username = next((p for p in reversed(parts) if p and not p.startswith("http") and "instagram" not in p), None)
+    if not username:
+        return jsonify({"error": "Username Instagram introuvable dans l'URL"}), 400
 
+    profile_url = f"https://www.instagram.com/{username}/"
+
+    # ── Tentative 1 : yt-dlp (plus robuste sur les IPs datacenter) ────────────
+    try:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "cookiefile": IG_COOKIES_FILE,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                "Accept-Language": "fr-FR,fr;q=0.9",
+            },
+            "playlist_items": "1:30",
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(profile_url, download=False)
+
+        entries = info.get("entries") or []
+        posts = []
+        for e in entries:
+            if not e:
+                continue
+            duration = e.get("duration")
+            post_type = "video" if duration else "image"
+            posts.append({
+                "id": e.get("id") or e.get("shortcode", ""),
+                "title": (e.get("title") or e.get("description") or "Sans titre")[:100],
+                "url": e.get("url") or e.get("webpage_url") or "",
+                "thumbnail": e.get("thumbnail"),
+                "duration": duration,
+                "type": post_type,
+                "likes": e.get("like_count") or 0,
+                "views": e.get("view_count"),
+                "comments": e.get("comment_count") or 0,
+            })
+
+        if posts:
+            posts.sort(key=lambda p: p["likes"], reverse=True)
+            return jsonify({"videos": posts, "platform": "instagram"})
+
+        raise Exception("yt-dlp n'a retourné aucun post, tentative instaloader")
+
+    except Exception as e1:
+        print(f"[instagram] yt-dlp échoué ({e1}), tentative instaloader...")
+
+    # ── Tentative 2 : instaloader avec cookies ────────────────────────────────
+    try:
         L = make_instaloader()
         profile = instaloader.Profile.from_username(L.context, username)
 
@@ -173,12 +222,12 @@ def _fetch_instagram(url):
             if count >= 30:
                 break
 
-        # Trier par likes décroissant — les plus performants en premier
         posts.sort(key=lambda p: p["likes"], reverse=True)
-
         return jsonify({"videos": posts, "platform": "instagram"})
-    except Exception as e:
-        return jsonify({"error": f"Instagram : {str(e)}"}), 500
+
+    except Exception as e2:
+        traceback.print_exc()
+        return jsonify({"error": f"Instagram inaccessible : {str(e2)}"}), 500
 
 
 def _fetch_youtube(url):
