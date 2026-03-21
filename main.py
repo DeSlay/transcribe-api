@@ -8,6 +8,7 @@ import glob
 import uuid
 import base64
 import traceback
+import re
 import instaloader
 
 app = Flask(__name__)
@@ -183,37 +184,35 @@ def carousel_images():
     if not data or not data.get("url"):
         return jsonify({"error": "url manquante"}), 400
 
-    url = data["url"].strip()
+    url = data["url"].strip().split("?")[0]  # retire ?img_index=1 etc.
+
+    # Extrait le shortcode Instagram depuis l'URL
+    m = re.search(r'/p/([A-Za-z0-9_-]+)', url)
+    if not m:
+        return jsonify({"error": "Shortcode Instagram introuvable dans l'URL"}), 400
+    shortcode = m.group(1)
 
     try:
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "cookiefile": IG_COOKIES_FILE,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        L = instaloader.Instaloader(
+            quiet=True,
+            download_pictures=False,
+            download_videos=False,
+            download_video_thumbnails=False,
+        )
+        post = instaloader.Post.from_shortcode(L.context, shortcode)
 
         images = []
-        caption = info.get("description", "") or info.get("title", "")
+        caption = post.caption or ""
 
-        if info.get("_type") == "playlist":
-            for i, entry in enumerate(info.get("entries") or []):
-                if not entry:
-                    continue
-                img_url = entry.get("url") or entry.get("thumbnail")
-                if img_url:
-                    images.append({"index": i, "url": img_url})
+        if post.typename == "GraphSidecar":
+            # Carousel : plusieurs slides
+            for i, node in enumerate(post.get_sidecar_nodes()):
+                img_url = node.video_url if node.is_video else node.display_url
+                images.append({"index": i, "url": img_url, "type": "video" if node.is_video else "image"})
+        elif post.is_video:
+            images.append({"index": 0, "url": post.video_url, "type": "video"})
         else:
-            # Single post — image ou vidéo
-            img_url = info.get("url") or info.get("thumbnail")
-            if img_url:
-                images.append({"index": 0, "url": img_url})
+            images.append({"index": 0, "url": post.url, "type": "image"})
 
         if not images:
             return jsonify({"error": "Aucune image trouvée dans ce post"}), 422
