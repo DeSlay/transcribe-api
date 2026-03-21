@@ -4,3 +4,4 @@ flask-cors
 yt-dlp
 groq
 gunicorn
+instaloader

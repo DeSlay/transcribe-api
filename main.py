@@ -8,6 +8,7 @@ import glob
 import uuid
 import base64
 import traceback
+import instaloader
 
 app = Flask(__name__)
 CORS(app)
@@ -102,32 +103,71 @@ def profile_videos():
 
     url = data["url"].strip()
 
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": True,
-        "cookiefile": COOKIES_FILE,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-    }
+    if "instagram.com" in url:
+        return _fetch_instagram(url)
+    else:
+        return _fetch_youtube(url)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
 
-    entries = info.get("entries", [info])
-    videos = [
-        {
-            "id": e.get("id", ""),
-            "title": e.get("title", "Sans titre"),
-            "url": e.get("url") or e.get("webpage_url", ""),
-            "duration": e.get("duration"),
-            "thumbnail": e.get("thumbnail"),
+def _fetch_instagram(url):
+    try:
+        # Extrait le username depuis l'URL
+        username = url.rstrip("/").split("/")[-1].lstrip("@")
+        if not username:
+            return jsonify({"error": "Username Instagram introuvable dans l'URL"}), 400
+
+        L = instaloader.Instaloader(quiet=True, download_pictures=False,
+                                     download_videos=False, download_video_thumbnails=False)
+        profile = instaloader.Profile.from_username(L.context, username)
+
+        videos = []
+        for post in profile.get_posts():
+            if post.is_video:
+                videos.append({
+                    "id": post.shortcode,
+                    "title": (post.caption[:80] if post.caption else "Sans titre"),
+                    "url": f"https://www.instagram.com/p/{post.shortcode}/",
+                    "thumbnail": post.url,
+                    "duration": post.video_duration,
+                })
+            if len(videos) >= 20:
+                break
+
+        return jsonify({"videos": videos, "platform": "instagram"})
+    except Exception as e:
+        return jsonify({"error": f"Instagram : {str(e)}"}), 500
+
+
+def _fetch_youtube(url):
+    try:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "cookiefile": COOKIES_FILE,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            },
         }
-        for e in entries if e
-    ]
 
-    return jsonify({"videos": videos})
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        entries = info.get("entries", [info])
+        videos = [
+            {
+                "id": e.get("id", ""),
+                "title": e.get("title", "Sans titre"),
+                "url": e.get("url") or e.get("webpage_url", ""),
+                "duration": e.get("duration"),
+                "thumbnail": e.get("thumbnail"),
+            }
+            for e in entries if e
+        ]
+
+        return jsonify({"videos": videos, "platform": "youtube"})
+    except Exception as e:
+        return jsonify({"error": f"YouTube : {str(e)}"}), 500
 
 
 if __name__ == "__main__":
