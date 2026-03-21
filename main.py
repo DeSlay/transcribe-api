@@ -6,11 +6,20 @@ import groq
 import os
 import glob
 import uuid
+import base64
 import traceback
 
 app = Flask(__name__)
 CORS(app)
 client = groq.Groq(api_key=os.environ["GROQ_API_KEY"])
+
+# Décode les cookies YouTube depuis la variable d'env Render
+_cookies_b64 = os.environ.get("YOUTUBE_COOKIES_B64")
+if _cookies_b64:
+    with open("/tmp/yt_cookies.txt", "wb") as _f:
+        _f.write(base64.b64decode(_cookies_b64))
+
+COOKIES_FILE = "/tmp/yt_cookies.txt" if os.path.exists("/tmp/yt_cookies.txt") else None
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
@@ -31,6 +40,7 @@ def transcribe():
             "outtmpl": output_template,
             "quiet": True,
             "no_warnings": True,
+            "cookiefile": COOKIES_FILE,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -96,6 +106,7 @@ def profile_videos():
         "quiet": True,
         "no_warnings": True,
         "extract_flat": True,
+        "cookiefile": COOKIES_FILE,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         },
