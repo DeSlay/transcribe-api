@@ -9,6 +9,7 @@ import uuid
 import base64
 import traceback
 import re
+import http.cookiejar
 import instaloader
 
 app = Flask(__name__)
@@ -29,6 +30,24 @@ if _ig_b64:
 
 COOKIES_FILE = "/tmp/yt_cookies.txt" if os.path.exists("/tmp/yt_cookies.txt") else None
 IG_COOKIES_FILE = "/tmp/ig_cookies.txt" if os.path.exists("/tmp/ig_cookies.txt") else None
+
+def make_instaloader():
+    """Crée un Instaloader avec les cookies Instagram si disponibles."""
+    L = instaloader.Instaloader(
+        quiet=True,
+        download_pictures=False,
+        download_videos=False,
+        download_video_thumbnails=False,
+    )
+    if IG_COOKIES_FILE:
+        try:
+            cj = http.cookiejar.MozillaCookieJar(IG_COOKIES_FILE)
+            cj.load(ignore_discard=True, ignore_expires=True)
+            L.context._session.cookies.update(cj)
+        except Exception as e:
+            print(f"[instaloader] Cookies non chargés : {e}")
+    return L
+
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
@@ -126,8 +145,7 @@ def _fetch_instagram(url):
         if not username or username.startswith("http"):
             return jsonify({"error": "Username Instagram introuvable dans l'URL"}), 400
 
-        L = instaloader.Instaloader(quiet=True, download_pictures=False,
-                                     download_videos=False, download_video_thumbnails=False)
+        L = make_instaloader()
         profile = instaloader.Profile.from_username(L.context, username)
 
         posts = []
@@ -210,12 +228,7 @@ def carousel_images():
     shortcode = m.group(1)
 
     try:
-        L = instaloader.Instaloader(
-            quiet=True,
-            download_pictures=False,
-            download_videos=False,
-            download_video_thumbnails=False,
-        )
+        L = make_instaloader()
         post = instaloader.Post.from_shortcode(L.context, shortcode)
 
         images = []
