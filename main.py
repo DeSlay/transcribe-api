@@ -84,5 +84,40 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/profile-videos", methods=["POST"])
+def profile_videos():
+    data = request.get_json(force=True)
+    if not data or not data.get("url"):
+        return jsonify({"error": "url manquante"}), 400
+
+    url = data["url"].strip()
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    entries = info.get("entries", [info])
+    videos = [
+        {
+            "id": e.get("id", ""),
+            "title": e.get("title", "Sans titre"),
+            "url": e.get("url") or e.get("webpage_url", ""),
+            "duration": e.get("duration"),
+            "thumbnail": e.get("thumbnail"),
+        }
+        for e in entries if e
+    ]
+
+    return jsonify({"videos": videos})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
