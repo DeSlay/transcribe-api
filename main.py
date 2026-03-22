@@ -69,6 +69,7 @@ def transcribe():
             "outtmpl": output_template,
             "quiet": True,
             "no_warnings": True,
+            "socket_timeout": 30,
             "cookiefile": IG_COOKIES_FILE if "instagram.com" in url else COOKIES_FILE,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
