@@ -37,7 +37,12 @@ if _tk_b64:
 
 COOKIES_FILE = "/tmp/yt_cookies.txt" if os.path.exists("/tmp/yt_cookies.txt") else None
 IG_COOKIES_FILE = "/tmp/ig_cookies.txt" if os.path.exists("/tmp/ig_cookies.txt") else None
-TK_COOKIES_FILE = "/tmp/tk_cookies.txt" if os.path.exists("/tmp/tk_cookies.txt") else None
+_tk_local = os.path.expanduser("~/Documents/content-studio/www.tiktok.com_cookies.txt")
+TK_COOKIES_FILE = (
+    "/tmp/tk_cookies.txt" if os.path.exists("/tmp/tk_cookies.txt")
+    else _tk_local if os.path.exists(_tk_local)
+    else None
+)
 
 print(f"[boot] TK_COOKIES_FILE={TK_COOKIES_FILE}, TIKTOK_COOKIES_B64={'set' if _tk_b64 else 'NOT SET'}")
 
