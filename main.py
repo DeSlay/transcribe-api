@@ -73,6 +73,7 @@ def transcribe():
             return jsonify({"error": "url manquante"}), 400
 
         url = data["url"].strip()
+        print(f"[transcribe] URL reçue: {url}", flush=True)
 
         # Fichier unique par requête pour éviter les conflits
         unique_id = str(uuid.uuid4())[:8]
@@ -85,13 +86,6 @@ def transcribe():
             "no_warnings": True,
             "socket_timeout": 30,
             "cookiefile": IG_COOKIES_FILE if "instagram.com" in url else TK_COOKIES_FILE if "tiktok.com" in url else COOKIES_FILE,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            "extractor_args": {
-                "tiktok": {"webpage_download": ["1"]},
-            },
         }
 
         try:
@@ -327,7 +321,7 @@ def _fetch_youtube(url):
             {
                 "id": e.get("id", ""),
                 "title": e.get("title", "Sans titre"),
-                "url": e.get("url") or e.get("webpage_url", ""),
+                "url": e.get("webpage_url") or e.get("url", ""),
                 "duration": e.get("duration"),
                 "thumbnail": e.get("thumbnail"),
             }
