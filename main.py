@@ -29,8 +29,15 @@ if _ig_b64:
     with open("/tmp/ig_cookies.txt", "wb") as _f:
         _f.write(base64.b64decode(_ig_b64))
 
+# Décode les cookies TikTok
+_tk_b64 = os.environ.get("TIKTOK_COOKIES_B64")
+if _tk_b64:
+    with open("/tmp/tk_cookies.txt", "wb") as _f:
+        _f.write(base64.b64decode(_tk_b64))
+
 COOKIES_FILE = "/tmp/yt_cookies.txt" if os.path.exists("/tmp/yt_cookies.txt") else None
 IG_COOKIES_FILE = "/tmp/ig_cookies.txt" if os.path.exists("/tmp/ig_cookies.txt") else None
+TK_COOKIES_FILE = "/tmp/tk_cookies.txt" if os.path.exists("/tmp/tk_cookies.txt") else None
 
 def make_instaloader():
     """Crée un Instaloader avec les cookies Instagram si disponibles."""
@@ -70,7 +77,7 @@ def transcribe():
             "quiet": True,
             "no_warnings": True,
             "socket_timeout": 30,
-            "cookiefile": IG_COOKIES_FILE if "instagram.com" in url else COOKIES_FILE,
+            "cookiefile": IG_COOKIES_FILE if "instagram.com" in url else TK_COOKIES_FILE if "tiktok.com" in url else COOKIES_FILE,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
