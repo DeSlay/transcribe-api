@@ -1,7 +1,7 @@
 # requirements.txt
 flask
 flask-cors
-yt-dlp
+yt-dlp>=2025.1.1
 groq
 gunicorn
 instaloader
