@@ -39,6 +39,8 @@ COOKIES_FILE = "/tmp/yt_cookies.txt" if os.path.exists("/tmp/yt_cookies.txt") el
 IG_COOKIES_FILE = "/tmp/ig_cookies.txt" if os.path.exists("/tmp/ig_cookies.txt") else None
 TK_COOKIES_FILE = "/tmp/tk_cookies.txt" if os.path.exists("/tmp/tk_cookies.txt") else None
 
+print(f"[boot] TK_COOKIES_FILE={TK_COOKIES_FILE}, TIKTOK_COOKIES_B64={'set' if _tk_b64 else 'NOT SET'}")
+
 def make_instaloader():
     """Crée un Instaloader avec les cookies Instagram si disponibles."""
     L = instaloader.Instaloader(
