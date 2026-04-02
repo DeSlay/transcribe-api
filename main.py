@@ -139,11 +139,12 @@ def profile_videos():
         return jsonify({"error": "url manquante"}), 400
 
     url = data["url"].strip()
+    limit = int(data.get("limit", 5))
 
     if "instagram.com" in url:
-        return _fetch_instagram(url)
+        return _fetch_instagram(url, limit=limit)
     else:
-        return _fetch_youtube(url)
+        return _fetch_youtube(url, limit=limit)
 
 
 def _apify_instagram(username):
@@ -193,7 +194,7 @@ def _apify_instagram(username):
     return posts
 
 
-def _fetch_instagram(url):
+def _fetch_instagram(url, limit=5):
     """Scrape un profil Instagram : Apify → yt-dlp → instaloader."""
     # Extrait le username
     parts = url.rstrip("/").split("/")
@@ -284,7 +285,7 @@ def _fetch_instagram(url):
                 "views": post.video_view_count if post.is_video else None,
                 "comments": post.comments or 0,
             })
-            if count >= 30:
+            if count >= limit:
                 break
 
         posts.sort(key=lambda p: p["likes"], reverse=True)
@@ -301,7 +302,7 @@ def _fetch_instagram(url):
         }), 500
 
 
-def _fetch_youtube(url):
+def _fetch_youtube(url, limit=5):
     try:
         ydl_opts = {
             "quiet": True,
@@ -316,7 +317,7 @@ def _fetch_youtube(url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        entries = info.get("entries", [info])
+        entries = info.get("entries", [info])[:limit]
         videos = [
             {
                 "id": e.get("id", ""),
