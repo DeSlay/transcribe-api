@@ -459,41 +459,38 @@ def carousel_images():
     shortcode = m.group(1)
     post_url = f"https://www.instagram.com/p/{shortcode}/"
 
-    # ── Tentative 1 : yt-dlp (pas d'appel graphql/query, mobile UA) ──────────
+    # ── Tentative 1 : instaloader (méthode principale — fonctionne bien) ──────
+    try:
+        images, caption = _instaloader_post(shortcode)
+        if images:
+            print(f"[carousel] instaloader OK — {len(images)} média(s)")
+            return jsonify({"images": images, "caption": caption})
+        print("[carousel] instaloader : aucune image, passage à yt-dlp...")
+    except Exception as e1:
+        print(f"[carousel] instaloader échoué ({e1}), passage à yt-dlp...")
+
+    # ── Tentative 2 : yt-dlp (fallback si instaloader 403) ───────────────────
     try:
         images, caption = _ytdlp_post(post_url)
         if images:
             print(f"[carousel] yt-dlp OK — {len(images)} média(s)")
             return jsonify({"images": images, "caption": caption})
-        print("[carousel] yt-dlp : aucune image, passage à Apify...")
-    except Exception as e1:
-        print(f"[carousel] yt-dlp échoué ({e1}), passage à Apify...")
+        print("[carousel] yt-dlp : aucune image...")
+    except Exception as e2:
+        print(f"[carousel] yt-dlp échoué ({e2})")
 
-    # ── Tentative 2 : Apify (proxies résidentiels — contourne le blocage IP) ──
+    # ── Tentative 3 : Apify (proxies résidentiels — si APIFY_API_TOKEN dispo) ─
     try:
         images, caption = _apify_post(post_url)
         if images:
             print(f"[carousel] Apify OK — {len(images)} média(s)")
             return jsonify({"images": images, "caption": caption})
-        print("[carousel] Apify : aucune image, passage à instaloader...")
-    except Exception as e2:
-        print(f"[carousel] Apify échoué ({e2}), passage à instaloader...")
-
-    # ── Tentative 3 : instaloader (dernier recours, risque 403 datacenter) ────
-    try:
-        images, caption = _instaloader_post(shortcode)
-        if not images:
-            return jsonify({"error": "Aucune image trouvée dans ce post"}), 422
-        print(f"[carousel] instaloader OK — {len(images)} média(s)")
-        return jsonify({"images": images, "caption": caption})
+        print("[carousel] Apify : aucune image...")
     except Exception as e3:
-        traceback.print_exc()
-        return jsonify({
-            "error": (
-                f"Toutes les méthodes ont échoué pour ce post Instagram. "
-                f"Dernière erreur : {str(e3)}"
-            )
-        }), 500
+        print(f"[carousel] Apify échoué ({e3})")
+
+    traceback.print_exc()
+    return jsonify({"error": "Toutes les méthodes ont échoué pour ce post Instagram."}), 500
 
 
 if __name__ == "__main__":
