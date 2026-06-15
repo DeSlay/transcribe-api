@@ -599,7 +599,9 @@ def _upload_to_gemini_file_api(video_bytes: bytes, api_key: str, mime_type: str 
 @app.route("/analyze-deep", methods=["POST"])
 def analyze_deep():
     """Analyse complète d'une vidéo (URL → MP4 → Gemini direct)."""
+    import time as _t
     video_path = None
+    t0 = _t.time()
     try:
         data = request.get_json(force=True)
         if not data or not data.get("url"):
@@ -609,7 +611,7 @@ def analyze_deep():
         if not api_key:
             return jsonify({"error": "GOOGLE_AI_API_KEY non définie côté serveur"}), 500
 
-        print(f"[analyze-deep] URL: {url}", flush=True)
+        print(f"[analyze-deep] ▶ START URL={url[:60]} t=0s", flush=True)
         unique_id = str(uuid.uuid4())[:8]
         output_template = f"/tmp/video_{unique_id}.%(ext)s"
         ydl_opts = {
@@ -636,15 +638,17 @@ def analyze_deep():
             return jsonify({"error": "Fichier vidéo introuvable après téléchargement"}), 422
         video_path = files[0]
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        print(f"[analyze-deep] download OK : {size_mb:.1f}MB", flush=True)
+        print(f"[analyze-deep] ✓ download OK ({size_mb:.1f}MB) t={_t.time()-t0:.1f}s", flush=True)
 
         # Upload à Gemini File API
         with open(video_path, "rb") as f:
             video_bytes = f.read()
+        print(f"[analyze-deep] ▶ Gemini upload start, {len(video_bytes)/1024/1024:.1f}MB t={_t.time()-t0:.1f}s", flush=True)
         file_uri = _upload_to_gemini_file_api(video_bytes, api_key)
-        print(f"[analyze-deep] Gemini upload OK : {file_uri}", flush=True)
+        print(f"[analyze-deep] ✓ Gemini upload OK : {file_uri[:60]} t={_t.time()-t0:.1f}s", flush=True)
 
         # Appel Gemini avec prompt + fileUri
+        print(f"[analyze-deep] ▶ Gemini generateContent t={_t.time()-t0:.1f}s", flush=True)
         gem_res = _requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
             json={
@@ -663,23 +667,26 @@ def analyze_deep():
             },
             timeout=240,
         )
+        print(f"[analyze-deep] ← Gemini HTTP {gem_res.status_code} t={_t.time()-t0:.1f}s", flush=True)
         if not gem_res.ok:
             return jsonify({"error": f"Gemini analyse : HTTP {gem_res.status_code} — {gem_res.text[:300]}"}), 502
 
         gem_data = gem_res.json()
         text = (gem_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text") or "")
         if not text:
-            return jsonify({"error": "Gemini a renvoyé une réponse vide", "raw": gem_data}), 502
-        # Parse le JSON (Gemini doit le renvoyer pur en mode application/json)
+            print(f"[analyze-deep] ❌ Gemini text vide. raw keys: {list(gem_data.keys())}", flush=True)
+            return jsonify({"error": "Gemini a renvoyé une réponse vide", "raw_keys": list(gem_data.keys())}), 502
+        # Parse le JSON
         import json as _json
         try:
             analysis = _json.loads(text)
-        except Exception:
-            # fallback : extract first {...} block
+        except Exception as je:
+            print(f"[analyze-deep] ⚠ JSON parse fail: {je} — fallback regex", flush=True)
             m = re.search(r"\{[\s\S]*\}", text)
             analysis = _json.loads(m.group(0)) if m else {"raw": text}
 
         analysis["video_size_mb"] = round(size_mb, 1)
+        print(f"[analyze-deep] ✅ END t={_t.time()-t0:.1f}s — scenes={len(analysis.get('sceneBreakdown', []))}", flush=True)
         return jsonify(analysis)
 
     except Exception as e:
