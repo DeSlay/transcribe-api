@@ -541,9 +541,11 @@ Analyse cette vidéo publicitaire avec précision. Réponds UNIQUEMENT en JSON v
 
 {"summary":"résumé 2-3 phrases du concept et de l'efficacité marketing","hook":"accroche exacte des 3 premières secondes mot pour mot","tone":"ton exact (ex: authentique/confiant/humoristique)","persona":"description physique précise du créateur si présent","characterMasterBlock":"description stable en anglais ou vide","characterProfile":"dark|mediterranean|light|none","angles":["angle marketing 1","angle marketing 2"],"cta":"CTA exact","visualModeDetected":"ugc|product_texture|product_demo|broll|podcast|before_after","narrationMode":"talking_head|voice_over|mixed","selfieStyle":"handheld|tripod|unknown","pacing":"slow|medium|fast","detectedEnvironments":["env1","env2"],"production":{"cameraStyle":"...","lighting":"...","background":"...","backgroundExact":"description en anglais ultra-précise","outfit":"...","expressions":"...","editingStyle":"...","promptDirections":"english technical directions"},"sceneBreakdown":[{"order":1,"timestamp":"00:00-00:03","visualDescription":"...","textOrSpeech":"...","role":"hook|problème|présentation|texture|application|réaction|preuve|CTA","shotType":"face cam|close-up visage|macro produit|plan épaule|regard miroir|macro texture|b-roll","productVisible":false,"emotion":"...","motionType":"idle-breath|head-turn|micro-expression|handheld-drift|product-pour|skin-close|blink-speak|apply-motion"}],"transcript":"transcription mot pour mot complète","creativeInsights":{"hooks":["hook alt 1","hook alt 2","hook alt 3"],"angles":["angle 1","angle 2"],"formats":["format 1"],"ideas":["idée 1","idée 2"]}}"""
 
-def _upload_to_gemini_file_api(video_bytes: bytes, api_key: str, mime_type: str = "video/mp4") -> str:
-    """Upload via resumable upload, attend ACTIVE, retourne fileUri."""
+def _upload_to_gemini_file_api(video_path: str, api_key: str, mime_type: str = "video/mp4") -> str:
+    """Upload via resumable upload STREAM (pas de read en RAM), attend ACTIVE, retourne fileUri.
+    🆕 Prend video_path au lieu de bytes pour économiser la mémoire (Render Free 512MB)."""
     import time as _time
+    file_size = os.path.getsize(video_path)
     # 1. Init upload session
     init_res = _requests.post(
         f"https://generativelanguage.googleapis.com/resumable/upload/v1beta/files?key={api_key}",
@@ -551,10 +553,10 @@ def _upload_to_gemini_file_api(video_bytes: bytes, api_key: str, mime_type: str 
             "Content-Type": "application/json",
             "X-Goog-Upload-Protocol": "resumable",
             "X-Goog-Upload-Command": "start",
-            "X-Goog-Upload-Header-Content-Length": str(len(video_bytes)),
+            "X-Goog-Upload-Header-Content-Length": str(file_size),
             "X-Goog-Upload-Header-Content-Type": mime_type,
         },
-        json={"file": {"display_name": f"tiktok_{uuid.uuid4().hex[:8]}.mp4"}},
+        json={"file": {"display_name": f"video_{uuid.uuid4().hex[:8]}.mp4"}},
         timeout=30,
     )
     if not init_res.ok:
@@ -562,17 +564,18 @@ def _upload_to_gemini_file_api(video_bytes: bytes, api_key: str, mime_type: str 
     upload_url = init_res.headers.get("x-goog-upload-url")
     if not upload_url:
         raise Exception("Gemini File API : pas de upload URL")
-    # 2. Upload bytes
-    up_res = _requests.post(
-        upload_url,
-        headers={
-            "Content-Length": str(len(video_bytes)),
-            "X-Goog-Upload-Offset": "0",
-            "X-Goog-Upload-Command": "upload, finalize",
-        },
-        data=video_bytes,
-        timeout=120,
-    )
+    # 2. Upload en STREAM (fichier passé directement, requests envoie en chunks)
+    with open(video_path, "rb") as f:
+        up_res = _requests.post(
+            upload_url,
+            headers={
+                "Content-Length": str(file_size),
+                "X-Goog-Upload-Offset": "0",
+                "X-Goog-Upload-Command": "upload, finalize",
+            },
+            data=f,
+            timeout=120,
+        )
     if not up_res.ok:
         raise Exception(f"Gemini upload: HTTP {up_res.status_code} — {up_res.text[:200]}")
     file_info = up_res.json().get("file", {})
@@ -640,11 +643,9 @@ def analyze_deep():
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         print(f"[analyze-deep] ✓ download OK ({size_mb:.1f}MB) t={_t.time()-t0:.1f}s", flush=True)
 
-        # Upload à Gemini File API
-        with open(video_path, "rb") as f:
-            video_bytes = f.read()
-        print(f"[analyze-deep] ▶ Gemini upload start, {len(video_bytes)/1024/1024:.1f}MB t={_t.time()-t0:.1f}s", flush=True)
-        file_uri = _upload_to_gemini_file_api(video_bytes, api_key)
+        # Upload à Gemini File API (STREAM, pas de read en RAM)
+        print(f"[analyze-deep] ▶ Gemini upload stream, {size_mb:.1f}MB t={_t.time()-t0:.1f}s", flush=True)
+        file_uri = _upload_to_gemini_file_api(video_path, api_key)
         print(f"[analyze-deep] ✓ Gemini upload OK : {file_uri[:60]} t={_t.time()-t0:.1f}s", flush=True)
 
         # Appel Gemini avec prompt + fileUri
