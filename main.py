@@ -533,5 +533,163 @@ def carousel_images():
     return jsonify({"error": "Toutes les méthodes ont échoué pour ce post Instagram."}), 500
 
 
+# ── 🎬 /analyze-deep : Download MP4 + envoie direct à Gemini pour analyse complète
+# Pas de Whisper ici : Gemini transcrit nativement + analyse plans/hook/ton/etc.
+# Retourne le JSON d'analyse parsé prêt à consommer côté front.
+ANALYZE_DEEP_PROMPT = """Tu es Lead Creative Director spécialisé en ads UGC TikTok/Meta et direction artistique visuelle.
+Analyse cette vidéo publicitaire avec précision. Réponds UNIQUEMENT en JSON valide, sans markdown, sans texte autour.
+
+{"summary":"résumé 2-3 phrases du concept et de l'efficacité marketing","hook":"accroche exacte des 3 premières secondes mot pour mot","tone":"ton exact (ex: authentique/confiant/humoristique)","persona":"description physique précise du créateur si présent","characterMasterBlock":"description stable en anglais ou vide","characterProfile":"dark|mediterranean|light|none","angles":["angle marketing 1","angle marketing 2"],"cta":"CTA exact","visualModeDetected":"ugc|product_texture|product_demo|broll|podcast|before_after","narrationMode":"talking_head|voice_over|mixed","selfieStyle":"handheld|tripod|unknown","pacing":"slow|medium|fast","detectedEnvironments":["env1","env2"],"production":{"cameraStyle":"...","lighting":"...","background":"...","backgroundExact":"description en anglais ultra-précise","outfit":"...","expressions":"...","editingStyle":"...","promptDirections":"english technical directions"},"sceneBreakdown":[{"order":1,"timestamp":"00:00-00:03","visualDescription":"...","textOrSpeech":"...","role":"hook|problème|présentation|texture|application|réaction|preuve|CTA","shotType":"face cam|close-up visage|macro produit|plan épaule|regard miroir|macro texture|b-roll","productVisible":false,"emotion":"...","motionType":"idle-breath|head-turn|micro-expression|handheld-drift|product-pour|skin-close|blink-speak|apply-motion"}],"transcript":"transcription mot pour mot complète","creativeInsights":{"hooks":["hook alt 1","hook alt 2","hook alt 3"],"angles":["angle 1","angle 2"],"formats":["format 1"],"ideas":["idée 1","idée 2"]}}"""
+
+def _upload_to_gemini_file_api(video_bytes: bytes, api_key: str, mime_type: str = "video/mp4") -> str:
+    """Upload via resumable upload, attend ACTIVE, retourne fileUri."""
+    import time as _time
+    # 1. Init upload session
+    init_res = _requests.post(
+        f"https://generativelanguage.googleapis.com/resumable/upload/v1beta/files?key={api_key}",
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Length": str(len(video_bytes)),
+            "X-Goog-Upload-Header-Content-Type": mime_type,
+        },
+        json={"file": {"display_name": f"tiktok_{uuid.uuid4().hex[:8]}.mp4"}},
+        timeout=30,
+    )
+    if not init_res.ok:
+        raise Exception(f"Gemini File API init: HTTP {init_res.status_code} — {init_res.text[:200]}")
+    upload_url = init_res.headers.get("x-goog-upload-url")
+    if not upload_url:
+        raise Exception("Gemini File API : pas de upload URL")
+    # 2. Upload bytes
+    up_res = _requests.post(
+        upload_url,
+        headers={
+            "Content-Length": str(len(video_bytes)),
+            "X-Goog-Upload-Offset": "0",
+            "X-Goog-Upload-Command": "upload, finalize",
+        },
+        data=video_bytes,
+        timeout=120,
+    )
+    if not up_res.ok:
+        raise Exception(f"Gemini upload: HTTP {up_res.status_code} — {up_res.text[:200]}")
+    file_info = up_res.json().get("file", {})
+    file_name = file_info.get("name")
+    state = file_info.get("state")
+    uri = file_info.get("uri")
+    # 3. Poll until ACTIVE (max 35 × 2s = 70s)
+    attempts = 0
+    while state != "ACTIVE" and attempts < 35:
+        _time.sleep(2)
+        st_res = _requests.get(
+            f"https://generativelanguage.googleapis.com/v1beta/{file_name}?key={api_key}",
+            timeout=15,
+        )
+        if st_res.ok:
+            st_data = st_res.json()
+            state = st_data.get("state")
+            uri = st_data.get("uri")
+        attempts += 1
+    if state != "ACTIVE":
+        raise Exception(f"Gemini File API : fichier pas ACTIVE après 70s (state={state})")
+    return uri
+
+@app.route("/analyze-deep", methods=["POST"])
+def analyze_deep():
+    """Analyse complète d'une vidéo (URL → MP4 → Gemini direct)."""
+    video_path = None
+    try:
+        data = request.get_json(force=True)
+        if not data or not data.get("url"):
+            return jsonify({"error": "url manquante"}), 400
+        url = data["url"].strip()
+        api_key = os.environ.get("GOOGLE_AI_API_KEY")
+        if not api_key:
+            return jsonify({"error": "GOOGLE_AI_API_KEY non définie côté serveur"}), 500
+
+        print(f"[analyze-deep] URL: {url}", flush=True)
+        unique_id = str(uuid.uuid4())[:8]
+        output_template = f"/tmp/video_{unique_id}.%(ext)s"
+        ydl_opts = {
+            "format": "best[ext=mp4][filesize<25M]/best[ext=mp4]/best",
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 30,
+            "cookiefile": (
+                IG_COOKIES_FILE if "instagram.com" in url
+                else TK_COOKIES_FILE if "tiktok.com" in url
+                else FB_COOKIES_FILE if ("facebook.com" in url or "fb.com" in url or "fbcdn.net" in url)
+                else COOKIES_FILE
+            ),
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            return jsonify({"error": f"Téléchargement échoué : {str(e)}"}), 422
+
+        files = glob.glob(f"/tmp/video_{unique_id}.*")
+        if not files:
+            return jsonify({"error": "Fichier vidéo introuvable après téléchargement"}), 422
+        video_path = files[0]
+        size_mb = os.path.getsize(video_path) / (1024 * 1024)
+        print(f"[analyze-deep] download OK : {size_mb:.1f}MB", flush=True)
+
+        # Upload à Gemini File API
+        with open(video_path, "rb") as f:
+            video_bytes = f.read()
+        file_uri = _upload_to_gemini_file_api(video_bytes, api_key)
+        print(f"[analyze-deep] Gemini upload OK : {file_uri}", flush=True)
+
+        # Appel Gemini avec prompt + fileUri
+        gem_res = _requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+            json={
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"fileData": {"mimeType": "video/mp4", "fileUri": file_uri}},
+                        {"text": ANALYZE_DEEP_PROMPT},
+                    ],
+                }],
+                "generationConfig": {
+                    "maxOutputTokens": 16000,
+                    "temperature": 0.2,
+                    "responseMimeType": "application/json",
+                },
+            },
+            timeout=240,
+        )
+        if not gem_res.ok:
+            return jsonify({"error": f"Gemini analyse : HTTP {gem_res.status_code} — {gem_res.text[:300]}"}), 502
+
+        gem_data = gem_res.json()
+        text = (gem_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text") or "")
+        if not text:
+            return jsonify({"error": "Gemini a renvoyé une réponse vide", "raw": gem_data}), 502
+        # Parse le JSON (Gemini doit le renvoyer pur en mode application/json)
+        import json as _json
+        try:
+            analysis = _json.loads(text)
+        except Exception:
+            # fallback : extract first {...} block
+            m = re.search(r"\{[\s\S]*\}", text)
+            analysis = _json.loads(m.group(0)) if m else {"raw": text}
+
+        analysis["video_size_mb"] = round(size_mb, 1)
+        return jsonify(analysis)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if video_path and os.path.exists(video_path):
+            try: os.remove(video_path)
+            except Exception: pass
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
