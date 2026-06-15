@@ -44,7 +44,20 @@ TK_COOKIES_FILE = (
     else None
 )
 
+# Cookies Facebook (Ads Library + Reels). Présent localement ou via FB_COOKIES_B64.
+_fb_b64 = os.environ.get("FB_COOKIES_B64")
+if _fb_b64:
+    with open("/tmp/fb_cookies.txt", "wb") as _f:
+        _f.write(base64.b64decode(_fb_b64))
+_fb_local = os.path.expanduser("~/Documents/transcribe-api/www.facebook.com_cookies.txt")
+FB_COOKIES_FILE = (
+    "/tmp/fb_cookies.txt" if os.path.exists("/tmp/fb_cookies.txt")
+    else _fb_local if os.path.exists(_fb_local)
+    else None
+)
+
 print(f"[boot] TK_COOKIES_FILE={TK_COOKIES_FILE}, TIKTOK_COOKIES_B64={'set' if _tk_b64 else 'NOT SET'}")
+print(f"[boot] FB_COOKIES_FILE={FB_COOKIES_FILE}, FB_COOKIES_B64={'set' if _fb_b64 else 'NOT SET'}")
 
 def make_instaloader():
     """Crée un Instaloader avec les cookies Instagram si disponibles."""
@@ -79,13 +92,21 @@ def transcribe():
         unique_id = str(uuid.uuid4())[:8]
         output_template = f"/tmp/audio_{unique_id}.%(ext)s"
 
+        # 🆕 Télécharge MP4 (vidéo + audio) au lieu d'audio seul :
+        # - Whisper Groq accepte les MP4 (extrait l'audio auto)
+        # - On peut renvoyer la vidéo encodée en base64 pour analyse plans Gemini
         ydl_opts = {
-            "format": "bestaudio/best",
+            "format": "best[ext=mp4][filesize<25M]/best[ext=mp4]/best",
             "outtmpl": output_template,
             "quiet": True,
             "no_warnings": True,
             "socket_timeout": 30,
-            "cookiefile": IG_COOKIES_FILE if "instagram.com" in url else TK_COOKIES_FILE if "tiktok.com" in url else COOKIES_FILE,
+            "cookiefile": (
+                IG_COOKIES_FILE if "instagram.com" in url
+                else TK_COOKIES_FILE if "tiktok.com" in url
+                else FB_COOKIES_FILE if ("facebook.com" in url or "fb.com" in url or "fbcdn.net" in url)
+                else COOKIES_FILE
+            ),
         }
 
         try:
@@ -97,14 +118,14 @@ def transcribe():
         # Trouve le fichier téléchargé
         files = glob.glob(f"/tmp/audio_{unique_id}.*")
         if not files:
-            return jsonify({"error": "Fichier audio introuvable après téléchargement"}), 422
+            return jsonify({"error": "Fichier vidéo/audio introuvable après téléchargement"}), 422
 
         audio_path = files[0]
 
         # Limite 25 MB (Groq Whisper)
         size_mb = os.path.getsize(audio_path) / (1024 * 1024)
         if size_mb > 25:
-            return jsonify({"error": f"Fichier audio trop grand ({size_mb:.1f} MB, max 25 MB)"}), 422
+            return jsonify({"error": f"Fichier trop grand ({size_mb:.1f} MB, max 25 MB)"}), 422
 
         with open(audio_path, "rb") as f:
             transcription = client.audio.transcriptions.create(
@@ -112,7 +133,26 @@ def transcribe():
                 model="whisper-large-v3",
             )
 
-        return jsonify({"transcription": transcription.text})
+        # 🆕 Encode la vidéo en base64 pour analyse plans côté Next.js (Gemini)
+        # Limite stricte 20MB pour rester sous le payload max Vercel
+        video_b64 = None
+        MAX_B64_BYTES = 20 * 1024 * 1024
+        try:
+            with open(audio_path, "rb") as f:
+                video_bytes = f.read()
+            if len(video_bytes) <= MAX_B64_BYTES:
+                video_b64 = base64.b64encode(video_bytes).decode("utf-8")
+                print(f"[transcribe] ✓ video_b64 encodé ({size_mb:.1f}MB)", flush=True)
+            else:
+                print(f"[transcribe] ⊘ vidéo trop grosse pour b64 ({size_mb:.1f}MB > 20MB)", flush=True)
+        except Exception as e:
+            print(f"[transcribe] ⚠ encode b64 échoué : {e}", flush=True)
+
+        return jsonify({
+            "transcription": transcription.text,
+            "video_b64": video_b64,
+            "video_size_mb": round(size_mb, 1),
+        })
 
     except Exception as e:
         traceback.print_exc()
